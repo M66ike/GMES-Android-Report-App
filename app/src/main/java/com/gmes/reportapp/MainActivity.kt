@@ -5,9 +5,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,15 +16,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
@@ -36,17 +27,15 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val GmesTeal = Color(0xFF005C52)
+private val GmesTeal = Color(0xFF00695C)
 private val GmesYellow = Color(0xFFFFD300)
 
 sealed interface Screen {
     data object Home : Screen
     data class Editor(val reportId: Long) : Screen
-    data object Settings : Screen
-    data class Library(val title: String, val type: String) : Screen
 }
 
-enum class ReportSection { HEADER, SUPPLY, DATA_RECORD, REVIEW }
+enum class ReportSection { HEADER, DETAILS, DATA_RECORD, INSPECTION, REVIEW }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,11 +52,7 @@ class MainActivity : ComponentActivity() {
                 var screen by remember { mutableStateOf<Screen>(Screen.Home) }
                 Surface(Modifier.fillMaxSize()) {
                     when (val current = screen) {
-                        Screen.Home -> HomeScreen(
-                            db = db,
-                            onOpen = { screen = Screen.Editor(it) },
-                            onSettings = { screen = Screen.Settings }
-                        )
+                        Screen.Home -> HomeScreen(db = db, onOpen = { screen = Screen.Editor(it) })
                         is Screen.Editor -> EditorScreen(
                             db = db,
                             reportId = current.reportId,
@@ -75,16 +60,6 @@ class MainActivity : ComponentActivity() {
                             onShare = { uri, filename ->
                                 startActivity(Intent.createChooser(PdfExporter.shareIntent(uri, filename), "Share report"))
                             }
-                        )
-                        Screen.Settings -> SettingsScreen(
-                            onBack = { screen = Screen.Home },
-                            onOpenLibrary = { title, type -> screen = Screen.Library(title, type) }
-                        )
-                        is Screen.Library -> LibraryScreen(
-                            db = db,
-                            title = current.title,
-                            type = current.type,
-                            onBack = { screen = Screen.Settings }
                         )
                     }
                 }
@@ -107,39 +82,42 @@ private fun AppHeader(title: String, action: (@Composable () -> Unit)? = null) {
 }
 
 @Composable
-private fun HomeScreen(db: AppDatabase, onOpen: (Long) -> Unit, onSettings: () -> Unit) {
+private fun HomeScreen(db: AppDatabase, onOpen: (Long) -> Unit) {
     val reports by db.reportDao().observeAll().collectAsStateWithLifecycle(emptyList())
     val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize()) {
-        AppHeader("Reports") {
-            TextButton(onClick = onSettings) { Text("Settings", color = Color.White) }
-        }
-        Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
-                onClick = {
-                    scope.launch {
-                        val date = SimpleDateFormat("dd/MM/yyyy", Locale.UK).format(Date())
-                        val id = db.reportDao().insert(ReportEntity(date = date))
-                        db.supplyCriteriaDao().insert(SupplyCriteriaEntity(reportId = id))
-                        db.dataRecordRowDao().ensureTrailingBlank(id)
-                        onOpen(id)
-                    }
-                },
-                modifier = Modifier.weight(1f)
-            ) { Text("New Report") }
-            OutlinedButton(onClick = onSettings) { Text("Libraries") }
-        }
+        AppHeader("Medical Location Reports")
+        Button(
+            onClick = {
+                scope.launch {
+                    val date = SimpleDateFormat("dd/MM/yyyy", Locale.UK).format(Date())
+                    val id = db.reportDao().insert(ReportEntity(date = date))
+                    db.supplyCriteriaDao().insert(SupplyCriteriaEntity(reportId = id, dateOfTest = date))
+                    db.dataRecordRowDao().ensureTrailingBlank(id)
+                    db.inspectionRowDao().ensureTrailingBlank(id)
+                    onOpen(id)
+                }
+            },
+            modifier = Modifier.fillMaxWidth().padding(16.dp)
+        ) { Text("New Medical Location Report") }
+
         if (reports.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No reports yet. Tap New Report to begin.", color = Color.Gray)
+                Text("No reports yet.", color = Color.Gray)
             }
         } else {
-            LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 items(reports, key = { it.id }) { report ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(14.dp)) {
-                            Text(report.project.ifBlank { "Untitled Report" }, fontWeight = FontWeight.Bold)
-                            Text(listOf(report.jobNumber, report.itemRef).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { report.date })
+                            Text(report.project.ifBlank { "Untitled Medical Location Report" }, fontWeight = FontWeight.Bold)
+                            Text(
+                                listOf(report.jobNumber, report.itemRef).filter { it.isNotBlank() }.joinToString(" · ")
+                                    .ifBlank { report.date }
+                            )
                             if (report.address.isNotBlank()) Text(report.address, style = MaterialTheme.typography.bodySmall)
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                                 TextButton(onClick = { onOpen(report.id) }) { Text("Open") }
@@ -162,8 +140,9 @@ private fun EditorScreen(
 ) {
     val report by db.reportDao().observe(reportId).collectAsStateWithLifecycle(initialValue = null)
     var section by rememberSaveable(reportId) { mutableStateOf(ReportSection.HEADER) }
+
     Column(Modifier.fillMaxSize()) {
-        AppHeader("Report Editor") {
+        AppHeader("Medical Location Report") {
             TextButton(onClick = onClose) { Text("Close", color = Color.White) }
         }
         SectionStrip(section = section, onSelect = { section = it })
@@ -176,9 +155,9 @@ private fun EditorScreen(
                     report = current,
                     onSave = { db.reportDao().update(it.copy(updatedAt = System.currentTimeMillis())) },
                     onBack = onClose,
-                    onNext = { section = ReportSection.SUPPLY }
+                    onNext = { section = ReportSection.DETAILS }
                 )
-                ReportSection.SUPPLY -> SupplySection(
+                ReportSection.DETAILS -> DetailsSection(
                     db = db,
                     reportId = reportId,
                     onBack = { section = ReportSection.HEADER },
@@ -187,13 +166,19 @@ private fun EditorScreen(
                 ReportSection.DATA_RECORD -> DataRecordSection(
                     db = db,
                     reportId = reportId,
-                    onBack = { section = ReportSection.SUPPLY },
+                    onBack = { section = ReportSection.DETAILS },
+                    onNext = { section = ReportSection.INSPECTION }
+                )
+                ReportSection.INSPECTION -> InspectionSection(
+                    db = db,
+                    reportId = reportId,
+                    onBack = { section = ReportSection.DATA_RECORD },
                     onNext = { section = ReportSection.REVIEW }
                 )
                 ReportSection.REVIEW -> ReviewSection(
                     db = db,
                     reportId = reportId,
-                    onBack = { section = ReportSection.DATA_RECORD },
+                    onBack = { section = ReportSection.INSPECTION },
                     onShare = onShare
                 )
             }
@@ -203,24 +188,44 @@ private fun EditorScreen(
 
 @Composable
 private fun SectionStrip(section: ReportSection, onSelect: (ReportSection) -> Unit) {
-    val names = listOf(
+    val sections = listOf(
         ReportSection.HEADER to "Header",
-        ReportSection.SUPPLY to "Supply",
+        ReportSection.DETAILS to "Details",
         ReportSection.DATA_RECORD to "Data",
-        ReportSection.REVIEW to "Review"
+        ReportSection.INSPECTION to "Defects",
+        ReportSection.REVIEW to "PDF"
     )
-    Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        names.forEach { (s, label) ->
-            if (section == s) Button(onClick = { onSelect(s) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) { Text(label) }
-            else OutlinedButton(onClick = { onSelect(s) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) { Text(label) }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        sections.forEach { (s, label) ->
+            if (s == section) {
+                Button(
+                    onClick = { onSelect(s) },
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
+                ) { Text(label, style = MaterialTheme.typography.labelSmall) }
+            } else {
+                OutlinedButton(
+                    onClick = { onSelect(s) },
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
+                ) { Text(label, style = MaterialTheme.typography.labelSmall) }
+            }
         }
     }
 }
 
 @Composable
-private fun HeaderSection(report: ReportEntity, onSave: suspend (ReportEntity) -> Unit, onBack: () -> Unit, onNext: () -> Unit) {
+private fun HeaderSection(
+    report: ReportEntity,
+    onSave: suspend (ReportEntity) -> Unit,
+    onBack: () -> Unit,
+    onNext: () -> Unit
+) {
     var project by remember(report.id) { mutableStateOf(report.project) }
-    var job by remember(report.id) { mutableStateOf(report.jobNumber) }
+    var jobNumber by remember(report.id) { mutableStateOf(report.jobNumber) }
     var address by remember(report.id) { mutableStateOf(report.address) }
     var date by remember(report.id) { mutableStateOf(report.date) }
     var client by remember(report.id) { mutableStateOf(report.client) }
@@ -228,67 +233,84 @@ private fun HeaderSection(report: ReportEntity, onSave: suspend (ReportEntity) -
     var itemRef by remember(report.id) { mutableStateOf(report.itemRef) }
     val scope = rememberCoroutineScope()
 
+    fun updated() = report.copy(
+        project = project,
+        jobNumber = jobNumber,
+        address = address,
+        date = date,
+        client = client,
+        engineer = engineer,
+        itemRef = itemRef
+    )
+
     FormColumn("Report Header") {
+        Text("Matches the header shown on every page of the Excel/PDF template.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
         Field("Project", project) { project = it }
-        Field("Job Number", job) { job = it }
         Field("Address", address, singleLine = false) { address = it }
-        Field("Date (dd/MM/yyyy)", date) { date = it }
         Field("Client", client) { client = it }
-        Field("Engineer", engineer) { engineer = it }
         Field("Item Ref", itemRef) { itemRef = it }
+        Field("Job No", jobNumber) { jobNumber = it }
+        Field("Date (dd/MM/yyyy)", date) { date = it }
+        Field("Engineer", engineer) { engineer = it }
         NavigationRow(
-            onBack = onBack,
-            onNext = {
-                scope.launch {
-                    onSave(report.copy(project = project, jobNumber = job, address = address, date = date, client = client, engineer = engineer, itemRef = itemRef))
-                    onNext()
-                }
-            }
+            backText = "Save & Close",
+            onBack = { scope.launch { onSave(updated()); onBack() } },
+            onNext = { scope.launch { onSave(updated()); onNext() } }
         )
     }
 }
 
 @Composable
-private fun SupplySection(db: AppDatabase, reportId: Long, onBack: () -> Unit, onNext: () -> Unit) {
-    val supply by db.supplyCriteriaDao().observe(reportId).collectAsStateWithLifecycle(initialValue = null)
-    val item = supply ?: return Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-    var client by remember(item.id) { mutableStateOf(item.client) }
-    var engineer by remember(item.id) { mutableStateOf(item.engineer) }
-    var instrument by remember(item.id) { mutableStateOf(item.testInstrument) }
-    var cert by remember(item.id) { mutableStateOf(item.calCertNo) }
-    val clients by db.libraryItemDao().observeByType(LibraryTypes.CLIENT).collectAsStateWithLifecycle(emptyList())
-    val engineers by db.libraryItemDao().observeByType(LibraryTypes.ENGINEER).collectAsStateWithLifecycle(emptyList())
-    val instruments by db.libraryItemDao().observeByType(LibraryTypes.TEST_INSTRUMENT).collectAsStateWithLifecycle(emptyList())
-    val certs by db.libraryItemDao().observeByType(LibraryTypes.CAL_CERT).collectAsStateWithLifecycle(emptyList())
+private fun DetailsSection(db: AppDatabase, reportId: Long, onBack: () -> Unit, onNext: () -> Unit) {
+    val details by db.supplyCriteriaDao().observe(reportId).collectAsStateWithLifecycle(initialValue = null)
+    val item = details
+    if (item == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        return
+    }
+
+    var testEquipment by remember(item.id) { mutableStateOf(item.testEquipment) }
+    var erbLocation by remember(item.id) { mutableStateOf(item.erbLocation) }
+    var testDetails by remember(item.id) { mutableStateOf(item.testDetails) }
+    var dateOfTest by remember(item.id) { mutableStateOf(item.dateOfTest) }
+    var requestedBy by remember(item.id) { mutableStateOf(item.requestedBy) }
+    var tnSCircuits by remember(item.id) { mutableStateOf(item.tnSCircuits) }
+    var dcSensitive by remember(item.id) { mutableStateOf(item.dcSensitiveDevice) }
+    var upsIps by remember(item.id) { mutableStateOf(item.upsIpsCircuits) }
+    var mcbType by remember(item.id) { mutableStateOf(item.mcbType) }
+    var mcbSize by remember(item.id) { mutableStateOf(item.mcbSize) }
     val scope = rememberCoroutineScope()
 
-    FormColumn("Supply Criteria") {
-        LibraryEntryField("Client", client, { client = it }, clients.map { it.value }) {
-            scope.launch { saveLibrary(db, LibraryTypes.CLIENT, client) }
-        }
-        LibraryEntryField("Engineer", engineer, { engineer = it }, engineers.map { it.value }) {
-            scope.launch { saveLibrary(db, LibraryTypes.ENGINEER, engineer) }
-        }
-        LibraryEntryField("Test Instrument", instrument, { instrument = it }, instruments.map { it.value }) {
-            scope.launch { saveLibrary(db, LibraryTypes.TEST_INSTRUMENT, instrument) }
-        }
-        LibraryEntryField("CAL. CERT. NO.", cert, { cert = it }, certs.map { it.value }) {
-            scope.launch { saveLibrary(db, LibraryTypes.CAL_CERT, cert) }
-        }
+    fun updated() = item.copy(
+        testEquipment = testEquipment,
+        erbLocation = erbLocation,
+        testDetails = testDetails,
+        dateOfTest = dateOfTest,
+        requestedBy = requestedBy,
+        tnSCircuits = tnSCircuits,
+        dcSensitiveDevice = dcSensitive,
+        upsIpsCircuits = upsIps,
+        mcbType = mcbType,
+        mcbSize = mcbSize
+    )
+
+    FormColumn("Test Details") {
+        Field("Test Equipment", testEquipment) { testEquipment = it }
+        Field("ERB Location", erbLocation) { erbLocation = it }
+        Field("Test Details", testDetails) { testDetails = it }
+        Field("Date of Test", dateOfTest) { dateOfTest = it }
+        Field("Requested By", requestedBy) { requestedBy = it }
+        Text("Circuit / protective device information", fontWeight = FontWeight.Bold)
+        Field("TN-S Circuits", tnSCircuits) { tnSCircuits = it }
+        Field("DC Sensitive Device Yes / No", dcSensitive) { dcSensitive = it }
+        Field("UPS/IPS Circuits", upsIps) { upsIps = it }
+        Field("MCB Type", mcbType) { mcbType = it }
+        Field("MCB Size", mcbSize) { mcbSize = it }
         NavigationRow(
-            onBack = {
-                scope.launch { db.supplyCriteriaDao().upsert(item.copy(client = client, engineer = engineer, testInstrument = instrument, calCertNo = cert)); onBack() }
-            },
-            onNext = {
-                scope.launch { db.supplyCriteriaDao().upsert(item.copy(client = client, engineer = engineer, testInstrument = instrument, calCertNo = cert)); onNext() }
-            }
+            onBack = { scope.launch { db.supplyCriteriaDao().upsert(updated()); onBack() } },
+            onNext = { scope.launch { db.supplyCriteriaDao().upsert(updated()); onNext() } }
         )
     }
-}
-
-private suspend fun saveLibrary(db: AppDatabase, type: String, value: String) {
-    val clean = value.trim()
-    if (clean.isNotEmpty()) db.libraryItemDao().insert(LibraryItemEntity(libraryType = type, value = clean))
 }
 
 @Composable
@@ -299,8 +321,8 @@ private fun DataRecordSection(db: AppDatabase, reportId: Long, onBack: () -> Uni
     LaunchedEffect(reportId, rows.size, rows.lastOrNull()?.isBlank()) { dao.ensureTrailingBlank(reportId) }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        Text("Data Record", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 8.dp))
-        Text("A new row is created automatically when the last row is used.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        Text("Medical Location Data Record", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 8.dp))
+        Text("The item number is automatic. Enter I for an insulated item (>500MΩ).", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
         Spacer(Modifier.height(8.dp))
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(rows, key = { it.id }) { row ->
@@ -328,206 +350,153 @@ private fun DataRowCard(row: DataRecordRowEntity, onChange: (DataRecordRowEntity
                 Text("Item ${row.rowNumber}", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 if (!row.isBlank()) TextButton(onClick = onDelete) { Text("Delete") }
             }
-            Field("Test Item", row.testItem) { onChange(row.copy(testItem = it)) }
-            Text("Unit", style = MaterialTheme.typography.labelMedium)
+            Field("Test Item Recorded Clockwise from Double Door", row.testItem) { onChange(row.copy(testItem = it)) }
+            Text("Connected Y/N", style = MaterialTheme.typography.labelMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("Ω", "MΩ").forEach { unit ->
-                    if (row.unit == unit) Button(onClick = { onChange(row.copy(unit = unit)) }) { Text(unit) }
-                    else OutlinedButton(onClick = { onChange(row.copy(unit = unit)) }) { Text(unit) }
+                listOf("Y", "N").forEach { value ->
+                    if (row.connected == value) Button(onClick = { onChange(row.copy(connected = value)) }) { Text(value) }
+                    else OutlinedButton(onClick = { onChange(row.copy(connected = value)) }) { Text(value) }
                 }
-                if (row.unit.isNotBlank()) TextButton(onClick = { onChange(row.copy(unit = "")) }) { Text("Clear") }
+                if (row.connected.isNotBlank()) TextButton(onClick = { onChange(row.copy(connected = "")) }) { Text("Clear") }
             }
-            OutlinedTextField(
-                value = row.measuredValue,
-                onValueChange = { onChange(row.copy(measuredValue = it)) },
-                label = { Text("Measured Value") },
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                singleLine = true
-            )
-            Field("Inspection Item No. (optional)", row.inspectionItemNumber) { onChange(row.copy(inspectionItemNumber = it)) }
-            Field("Comment (optional)", row.comment, singleLine = false) { onChange(row.copy(comment = it)) }
+            Field("Continuity Reading to ERB (Ω) - or I", row.continuityReading) { onChange(row.copy(continuityReading = it)) }
         }
     }
 }
 
 @Composable
-private fun ReviewSection(db: AppDatabase, reportId: Long, onBack: () -> Unit, onShare: (android.net.Uri, String) -> Unit) {
+private fun InspectionSection(db: AppDatabase, reportId: Long, onBack: () -> Unit, onNext: () -> Unit) {
+    val dao = db.inspectionRowDao()
+    val rows by dao.observe(reportId).collectAsStateWithLifecycle(emptyList())
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(reportId, rows.size, rows.lastOrNull()?.isBlank()) { dao.ensureTrailingBlank(reportId) }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+        Text("Medical Location Inspection Report", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 8.dp))
+        Text("Only defects / notes that need reporting are entered here.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        Spacer(Modifier.height(8.dp))
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(rows, key = { it.id }) { row ->
+                InspectionRowCard(
+                    row = row,
+                    onChange = { updated ->
+                        scope.launch {
+                            dao.update(updated.copy(updatedAt = System.currentTimeMillis()))
+                            dao.ensureTrailingBlank(reportId)
+                        }
+                    },
+                    onDelete = { scope.launch { dao.deleteAndRenumber(row) } }
+                )
+            }
+        }
+        NavigationRow(onBack = onBack, onNext = onNext)
+    }
+}
+
+@Composable
+private fun InspectionRowCard(row: InspectionRowEntity, onChange: (InspectionRowEntity) -> Unit, onDelete: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Item ${row.rowNumber}", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                if (!row.isBlank()) TextButton(onClick = onDelete) { Text("Delete") }
+            }
+            Field("Comment / Defect", row.comment, singleLine = false) { onChange(row.copy(comment = it)) }
+            Text("Classification", style = MaterialTheme.typography.labelMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    InspectionStatus.NOTE,
+                    InspectionStatus.DEFECT,
+                    InspectionStatus.EXISTING_DEFECT,
+                    InspectionStatus.RESOLVED
+                ).chunked(2).forEach { pair ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        pair.forEach { status ->
+                            if (row.status == status) {
+                                Button(onClick = { onChange(row.copy(status = status)) }, modifier = Modifier.weight(1f)) { Text(status) }
+                            } else {
+                                OutlinedButton(onClick = { onChange(row.copy(status = status)) }, modifier = Modifier.weight(1f)) { Text(status) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReviewSection(
+    db: AppDatabase,
+    reportId: Long,
+    onBack: () -> Unit,
+    onShare: (android.net.Uri, String) -> Unit
+) {
     val report by db.reportDao().observe(reportId).collectAsStateWithLifecycle(initialValue = null)
-    val supply by db.supplyCriteriaDao().observe(reportId).collectAsStateWithLifecycle(initialValue = null)
-    val rows by db.dataRecordRowDao().observe(reportId).collectAsStateWithLifecycle(emptyList())
+    val details by db.supplyCriteriaDao().observe(reportId).collectAsStateWithLifecycle(initialValue = null)
+    val dataRows by db.dataRecordRowDao().observe(reportId).collectAsStateWithLifecycle(emptyList())
+    val inspectionRows by db.inspectionRowDao().observe(reportId).collectAsStateWithLifecycle(emptyList())
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
-    var showSignature by remember { mutableStateOf(false) }
+    var exporting by remember { mutableStateOf(false) }
     val current = report ?: return
-    val warnings = remember(current, supply, rows) { buildWarnings(current, supply, rows) }
+    val usableData = dataRows.filterNot { it.isBlank() }
+    val usableInspection = inspectionRows.filterNot { it.isBlank() }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Review & Export", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(10.dp))
-        if (warnings.isEmpty()) {
-            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))) {
-                Text("No missing-field warnings detected.", Modifier.padding(12.dp))
-            }
-        } else {
-            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3CD))) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("Warnings — export is still allowed", fontWeight = FontWeight.Bold)
-                    warnings.forEach { Text("• $it") }
-                }
+    FormColumn("PDF Preview / Export") {
+        Text("The generated PDF now follows the supplied FM_041_2 style: portrait data record pages, landscape 37-point matrix pages and portrait inspection report pages.")
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("${usableData.size} data record item(s)", fontWeight = FontWeight.Bold)
+                Text("${usableInspection.size} inspection item(s)")
+                Text("Matrix pages are generated automatically from the continuity readings.")
             }
         }
-        Spacer(Modifier.height(14.dp))
-        Text("${rows.count { !it.isBlank() }} data record item(s)")
-        Text("PDF will be saved locally and then opened in the Android share sheet.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-        Spacer(Modifier.weight(1f))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("Back") }
-            Button(onClick = { showSignature = true }, modifier = Modifier.weight(1f)) { Text("Sign & Export PDF") }
+        if (current.project.isBlank() || current.jobNumber.isBlank() || current.itemRef.isBlank()) {
+            Text("Complete Project, Job No and Item Ref before issuing the final PDF.", color = MaterialTheme.colorScheme.error)
         }
-    }
-
-    if (showSignature) {
-        SignatureDialog(
-            onDismiss = { showSignature = false },
-            onSigned = { signature ->
-                showSignature = false
+        Button(
+            onClick = {
+                exporting = true
                 scope.launch {
-                    runCatching {
-                        withContext(Dispatchers.IO) { PdfExporter.createAndSave(context, current, supply, rows, signature) }
-                    }.onSuccess { (uri, filename) ->
-                        Toast.makeText(context, "Saved: $filename", Toast.LENGTH_LONG).show()
-                        onShare(uri, filename)
-                    }.onFailure {
-                        Toast.makeText(context, "PDF export failed: ${it.message}", Toast.LENGTH_LONG).show()
-                    }
-                }
-            }
-        )
-    }
-}
-
-private fun buildWarnings(report: ReportEntity, supply: SupplyCriteriaEntity?, rows: List<DataRecordRowEntity>): List<String> {
-    val out = mutableListOf<String>()
-    if (report.project.isBlank()) out += "Project is blank"
-    if (report.jobNumber.isBlank()) out += "Job Number is blank"
-    if (report.address.isBlank()) out += "Address is blank"
-    if (report.date.isBlank()) out += "Date is blank"
-    if (report.engineer.isBlank() && supply?.engineer.isNullOrBlank()) out += "Engineer is blank"
-    if (supply?.testInstrument.isNullOrBlank()) out += "Test Instrument is blank"
-    if (supply?.calCertNo.isNullOrBlank()) out += "CAL. CERT. NO. is blank"
-    rows.filterNot { it.isBlank() }.forEach { row ->
-        if (row.testItem.isBlank()) out += "Data item ${row.rowNumber}: Test Item is blank"
-        if (row.measuredValue.isBlank()) out += "Data item ${row.rowNumber}: Measured Value is blank"
-        if (row.unit.isBlank()) out += "Data item ${row.rowNumber}: Unit is blank"
-    }
-    if (rows.none { !it.isBlank() }) out += "No Data Record rows have been completed"
-    return out
-}
-
-@Composable
-private fun SignatureDialog(onDismiss: () -> Unit, onSigned: (SignatureData) -> Unit) {
-    var strokes by remember { mutableStateOf<List<List<Offset>>>(emptyList()) }
-    var currentStroke by remember { mutableStateOf<List<Offset>>(emptyList()) }
-    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Engineer Signature") },
-        text = {
-            Column {
-                Text("Sign in the box below. A signature is required before export.")
-                Spacer(Modifier.height(10.dp))
-                Canvas(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(180.dp)
-                        .background(Color.White)
-                        .onSizeChanged { canvasSize = it }
-                        .pointerInput(Unit) {
-                            detectDragGestures(
-                                onDragStart = { currentStroke = listOf(it) },
-                                onDrag = { change, _ -> currentStroke = currentStroke + change.position },
-                                onDragEnd = {
-                                    if (currentStroke.isNotEmpty()) strokes = strokes + listOf(currentStroke)
-                                    currentStroke = emptyList()
-                                },
-                                onDragCancel = { currentStroke = emptyList() }
+                    try {
+                        val saved = withContext(Dispatchers.IO) {
+                            PdfExporter.createAndSave(
+                                context = context,
+                                report = current,
+                                details = details,
+                                rows = dataRows,
+                                inspections = inspectionRows
                             )
                         }
-                ) {
-                    fun drawStroke(points: List<Offset>) {
-                        points.zipWithNext().forEach { (a, b) -> drawLine(Color.Black, a, b, strokeWidth = 3f, cap = StrokeCap.Round) }
-                    }
-                    strokes.forEach(::drawStroke)
-                    drawStroke(currentStroke)
-                }
-                TextButton(onClick = { strokes = emptyList(); currentStroke = emptyList() }) { Text("Clear signature") }
-            }
-        },
-        confirmButton = {
-            Button(
-                enabled = strokes.isNotEmpty() || currentStroke.isNotEmpty(),
-                onClick = {
-                    val all = if (currentStroke.isNotEmpty()) strokes + listOf(currentStroke) else strokes
-                    onSigned(SignatureData(
-                        strokes = all.map { stroke -> stroke.map { it.x to it.y } },
-                        width = canvasSize.width.toFloat(),
-                        height = canvasSize.height.toFloat()
-                    ))
-                }
-            ) { Text("Export") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-@Composable
-private fun SettingsScreen(onBack: () -> Unit, onOpenLibrary: (String, String) -> Unit) {
-    Column(Modifier.fillMaxSize()) {
-        AppHeader("Settings")
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = { onOpenLibrary("Client Library", LibraryTypes.CLIENT) }, modifier = Modifier.fillMaxWidth()) { Text("Client Library") }
-            Button(onClick = { onOpenLibrary("Engineer Library", LibraryTypes.ENGINEER) }, modifier = Modifier.fillMaxWidth()) { Text("Engineer Library") }
-            Button(onClick = { onOpenLibrary("Test Instrument Library", LibraryTypes.TEST_INSTRUMENT) }, modifier = Modifier.fillMaxWidth()) { Text("Test Instrument Library") }
-            Button(onClick = { onOpenLibrary("CAL. CERT. NO. Library", LibraryTypes.CAL_CERT) }, modifier = Modifier.fillMaxWidth()) { Text("CAL. CERT. NO. Library") }
-            OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back") }
-        }
-    }
-}
-
-@Composable
-private fun LibraryScreen(db: AppDatabase, title: String, type: String, onBack: () -> Unit) {
-    val items by db.libraryItemDao().observeByType(type).collectAsStateWithLifecycle(emptyList())
-    val scope = rememberCoroutineScope()
-    var newValue by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxSize()) {
-        AppHeader(title)
-        Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(newValue, { newValue = it }, label = { Text("New value") }, modifier = Modifier.weight(1f), singleLine = true)
-            Button(onClick = { scope.launch { saveLibrary(db, type, newValue); newValue = "" } }, enabled = newValue.isNotBlank()) { Text("Add") }
-        }
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(items, key = { it.id }) { item ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(item.value, modifier = Modifier.weight(1f))
-                        TextButton(onClick = { scope.launch { db.libraryItemDao().delete(item) } }) { Text("Delete") }
+                        Toast.makeText(context, "PDF saved to Downloads/GMES Reports", Toast.LENGTH_LONG).show()
+                        onShare(saved.first, saved.second)
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "PDF export failed: ${e.message}", Toast.LENGTH_LONG).show()
+                    } finally {
+                        exporting = false
                     }
                 }
-            }
+            },
+            enabled = !exporting,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (exporting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            else Text("Generate & Share PDF")
         }
-        OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth().padding(12.dp)) { Text("Back") }
+        OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back") }
     }
 }
 
 @Composable
 private fun FormColumn(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         content()
+        Spacer(Modifier.height(20.dp))
     }
 }
 
@@ -544,34 +513,14 @@ private fun Field(label: String, value: String, singleLine: Boolean = true, onCh
 }
 
 @Composable
-private fun LibraryEntryField(label: String, value: String, onValueChange: (String) -> Unit, options: List<String>, onSave: () -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Box(Modifier.fillMaxWidth()) {
-            OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
-                label = { Text(label) },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                trailingIcon = { TextButton(onClick = { expanded = true }) { Text("▼") } }
-            )
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                options.forEach { option ->
-                    DropdownMenuItem(text = { Text(option) }, onClick = { onValueChange(option); expanded = false })
-                }
-                if (options.isEmpty()) DropdownMenuItem(text = { Text("No saved values") }, onClick = { expanded = false }, enabled = false)
-            }
-        }
-        TextButton(onClick = onSave, enabled = value.isNotBlank() && value !in options) { Text("Save '$label' to global library") }
-    }
-}
-
-@Composable
-private fun NavigationRow(onBack: () -> Unit, onNext: () -> Unit) {
-    Spacer(Modifier.height(4.dp))
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("Back") }
-        Button(onClick = onNext, modifier = Modifier.weight(1f)) { Text("Next") }
+private fun NavigationRow(
+    onBack: () -> Unit,
+    onNext: () -> Unit,
+    backText: String = "Back",
+    nextText: String = "Next"
+) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text(backText) }
+        Button(onClick = onNext, modifier = Modifier.weight(1f)) { Text(nextText) }
     }
 }
