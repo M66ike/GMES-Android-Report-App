@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.gmes.reportapp"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.gmes.reportapp"
