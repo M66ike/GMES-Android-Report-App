@@ -31,20 +31,25 @@ data class ReportEntity(
 data class SupplyCriteriaEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val reportId: Long,
-    val client: String = "",
-    val engineer: String = "",
+    val testEquipment: String = "",
+    val erbLocation: String = "",
+    val testDetails: String = "R2, TOUCH V, Zs",
+    val dateOfTest: String = "",
+    val requestedBy: String = "",
+    val tnSCircuits: String = "",
+    val dcSensitiveDevice: String = "",
+    val upsIpsCircuits: String = "",
+    val mcbType: String = "",
+    val mcbSize: String = "",
+    val roomName: String = "",
+    val roomNumber: String = "",
+    val location: String = "",
+    val supplySource: String = "",
+    val protectiveDevice: String = "",
+    val cableSizeType: String = "",
     val testInstrument: String = "",
-    val calCertNo: String = ""
-)
-
-@Entity(
-    tableName = "library_items",
-    indices = [Index(value = ["libraryType", "value"], unique = true)]
-)
-data class LibraryItemEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val libraryType: String,
-    val value: String
+    val calCertNo: String = "",
+    val phaseRotation: String = ""
 )
 
 @Entity(
@@ -62,15 +67,43 @@ data class DataRecordRowEntity(
     val reportId: Long,
     val rowNumber: Int,
     val testItem: String = "",
-    val unit: String = "",
-    val measuredValue: String = "",
-    val inspectionItemNumber: String = "",
-    val comment: String = "",
+    val connected: String = "",
+    val continuityReading: String = "",
     val updatedAt: Long = System.currentTimeMillis()
 ) {
-    fun isBlank(): Boolean = testItem.isBlank() && unit.isBlank() && measuredValue.isBlank() &&
-        inspectionItemNumber.isBlank() && comment.isBlank()
+    fun isBlank(): Boolean = testItem.isBlank() && connected.isBlank() && continuityReading.isBlank()
 }
+
+@Entity(
+    tableName = "inspection_rows",
+    foreignKeys = [ForeignKey(
+        entity = ReportEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["reportId"],
+        onDelete = ForeignKey.CASCADE
+    )],
+    indices = [Index("reportId")]
+)
+data class InspectionRowEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val reportId: Long,
+    val rowNumber: Int,
+    val comment: String = "",
+    val status: String = "",
+    val updatedAt: Long = System.currentTimeMillis()
+) {
+    fun isBlank(): Boolean = comment.isBlank() && status.isBlank()
+}
+
+@Entity(
+    tableName = "library_items",
+    indices = [Index(value = ["libraryType", "value"], unique = true)]
+)
+data class LibraryItemEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val libraryType: String,
+    val value: String
+)
 
 @Dao
 interface ReportDao {
@@ -112,18 +145,6 @@ interface SupplyCriteriaDao {
         val existing = get(item.reportId)
         if (existing == null) insert(item.copy(id = 0)) else update(item.copy(id = existing.id))
     }
-}
-
-@Dao
-interface LibraryItemDao {
-    @Query("SELECT * FROM library_items WHERE libraryType = :type ORDER BY value COLLATE NOCASE")
-    fun observeByType(type: String): Flow<List<LibraryItemEntity>>
-
-    @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insert(item: LibraryItemEntity): Long
-
-    @Delete
-    suspend fun delete(item: LibraryItemEntity)
 }
 
 @Dao
@@ -170,16 +191,79 @@ interface DataRecordRowDao {
     }
 }
 
+@Dao
+interface InspectionRowDao {
+    @Query("SELECT * FROM inspection_rows WHERE reportId = :reportId ORDER BY rowNumber ASC")
+    fun observe(reportId: Long): Flow<List<InspectionRowEntity>>
+
+    @Query("SELECT * FROM inspection_rows WHERE reportId = :reportId ORDER BY rowNumber ASC")
+    suspend fun get(reportId: Long): List<InspectionRowEntity>
+
+    @Insert
+    suspend fun insert(row: InspectionRowEntity): Long
+
+    @Insert
+    suspend fun insertAll(rows: List<InspectionRowEntity>)
+
+    @Update
+    suspend fun update(row: InspectionRowEntity)
+
+    @Delete
+    suspend fun delete(row: InspectionRowEntity)
+
+    @Query("DELETE FROM inspection_rows WHERE reportId = :reportId")
+    suspend fun deleteForReport(reportId: Long)
+
+    @Transaction
+    suspend fun ensureTrailingBlank(reportId: Long) {
+        val rows = get(reportId)
+        if (rows.isEmpty() || !rows.last().isBlank()) {
+            insert(InspectionRowEntity(reportId = reportId, rowNumber = rows.size + 1))
+        }
+    }
+
+    @Transaction
+    suspend fun deleteAndRenumber(row: InspectionRowEntity) {
+        delete(row)
+        val remaining = get(row.reportId).filterNot { it.isBlank() }
+        deleteForReport(row.reportId)
+        val rebuilt = remaining.mapIndexed { index, item ->
+            item.copy(id = 0, rowNumber = index + 1, updatedAt = System.currentTimeMillis())
+        }.toMutableList()
+        rebuilt += InspectionRowEntity(reportId = row.reportId, rowNumber = rebuilt.size + 1)
+        insertAll(rebuilt)
+    }
+}
+
+@Dao
+interface LibraryItemDao {
+    @Query("SELECT * FROM library_items WHERE libraryType = :type ORDER BY value COLLATE NOCASE")
+    fun observeByType(type: String): Flow<List<LibraryItemEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(item: LibraryItemEntity): Long
+
+    @Delete
+    suspend fun delete(item: LibraryItemEntity)
+}
+
 @Database(
-    entities = [ReportEntity::class, SupplyCriteriaEntity::class, LibraryItemEntity::class, DataRecordRowEntity::class],
-    version = 1,
+    entities = [
+        ReportEntity::class,
+        SupplyCriteriaEntity::class,
+        DataRecordRowEntity::class,
+        InspectionRowEntity::class,
+        LibraryItemEntity::class
+    ],
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun reportDao(): ReportDao
     abstract fun supplyCriteriaDao(): SupplyCriteriaDao
-    abstract fun libraryItemDao(): LibraryItemDao
     abstract fun dataRecordRowDao(): DataRecordRowDao
+    abstract fun inspectionRowDao(): InspectionRowDao
+    abstract fun libraryItemDao(): LibraryItemDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -194,9 +278,16 @@ abstract class AppDatabase : RoomDatabase() {
     }
 }
 
+object InspectionStatus {
+    const val NOTE = "Note"
+    const val DEFECT = "Defect"
+    const val EXISTING_DEFECT = "Existing Defect"
+    const val RESOLVED = "Resolved"
+}
+
 object LibraryTypes {
     const val CLIENT = "client"
     const val ENGINEER = "engineer"
-    const val TEST_INSTRUMENT = "test_instrument"
-    const val CAL_CERT = "cal_cert"
+    const val TEST_EQUIPMENT = "test_equipment"
+    const val REQUESTED_BY = "requested_by"
 }
